@@ -27,7 +27,7 @@ const CAMPOS_ESTABLECIMIENTO = [
   { value: 'distrito', label: 'Distrito' },
 ]
 
-function Empty({ action }: { action?: string }) {
+function Empty() {
   return (
     <div className="flex flex-col items-start gap-3 rounded-xl border border-dashed border-border bg-muted/40 p-4">
       <p className="text-sm text-muted-foreground">Sin datos cargados todavía</p>
@@ -129,7 +129,6 @@ function Modal({ title, subtitle, onClose, children }: { title: string; subtitle
           {subtitle && <p className="text-sm text-muted-foreground">{subtitle}</p>}
         </div>
         {children}
-        <button type="button" onClick={onClose} className="hidden" />
       </div>
     </div>
   )
@@ -190,8 +189,8 @@ export default function Page() {
   const [cue, setCue] = useState<string | null>(null)
   const [school, setSchool] = useState<any>(null)
   const [team, setTeam] = useState<any[]>([])
-  const [connectivity, setConnectivity] = useState<any>(null)
   const [fed, setFed] = useState<any>(null)
+  const [ced, setCed] = useState<any>(null)
   const [requests, setRequests] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
@@ -200,18 +199,29 @@ export default function Page() {
   const [showCorreccion, setShowCorreccion] = useState(false)
   const [showMiembro, setShowMiembro] = useState(false)
   const [showSolicitud, setShowSolicitud] = useState(false)
+  const [editingContact, setEditingContact] = useState<any>(null)
 
-  async function refetchPortalData(numericCue: number) {
-    const [t, c, f, r] = await Promise.all([
-      getDb().schema('portal_escuelas').from('equipo_directivo').select('*').eq('cue', numericCue).order('created_at'),
-      getDb().schema('portal_escuelas').from('conectividad').select('*').eq('cue', numericCue).maybeSingle(),
-      getDb().schema('portal_escuelas').from('fed_asignado').select('*').eq('cue', numericCue).maybeSingle(),
+  async function refetchPortalData(numericCue: number, schoolData: any) {
+    const [t, r, cedRow] = await Promise.all([
+      getDb().from('contactos').select('*').eq('cue', numericCue).order('cargo'),
       getDb().schema('portal_escuelas').from('solicitudes').select('*').eq('cue', numericCue).order('created_at', { ascending: false }),
+      getDb().schema('portal_escuelas').from('coordinador_ced').select('*').maybeSingle(),
     ])
     setTeam(t.data || [])
-    setConnectivity(c.data)
-    setFed(f.data)
     setRequests(r.data || [])
+    setCed(cedRow.data)
+
+    if (schoolData?.fed_a_cargo && schoolData.fed_a_cargo !== 'Sin FED asignado') {
+      const { data: fedData } = await getDb()
+        .schema('portal_escuelas')
+        .from('fed_directorio')
+        .select('*')
+        .eq('nombre', schoolData.fed_a_cargo)
+        .maybeSingle()
+      setFed(fedData ? { ...fedData, distrito: schoolData.distrito } : { nombre: schoolData.fed_a_cargo, distrito: schoolData.distrito })
+    } else {
+      setFed(null)
+    }
   }
 
   async function handleSearch(inputCue: string) {
@@ -220,7 +230,9 @@ export default function Page() {
     const numericCue = Number(inputCue)
     const { data: schoolData } = await getDb()
       .from('establecimientos')
-      .select('cue,nombre,direccion,ciudad,distrito')
+      .select(
+        'cue,nombre,direccion,ciudad,distrito,fed_a_cargo,plan_enlace,proveedor_internet_pnce,pnce_estado,plan_piso_tecnologico,tipo_piso_instalado,mb'
+      )
       .eq('cue', numericCue)
       .maybeSingle()
     if (!schoolData) {
@@ -229,7 +241,7 @@ export default function Page() {
       return
     }
     setSchool(schoolData)
-    await refetchPortalData(numericCue)
+    await refetchPortalData(numericCue, schoolData)
     setCue(inputCue)
     setLoading(false)
   }
@@ -238,8 +250,8 @@ export default function Page() {
     setCue(null)
     setSchool(null)
     setTeam([])
-    setConnectivity(null)
     setFed(null)
+    setCed(null)
     setRequests([])
     setMessage('')
     setNotFound(false)
@@ -264,17 +276,28 @@ export default function Page() {
   async function submitMiembro(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const form = new FormData(e.currentTarget)
-    const { error } = await getDb().schema('portal_escuelas').from('equipo_directivo').insert({
+    const payload = {
       cue: Number(cue),
+      accion: editingContact ? 'editar' : 'agregar',
+      contacto_id: editingContact?.id ?? null,
+      nombre: form.get('nombre'),
+      apellido: form.get('apellido'),
       cargo: form.get('cargo'),
-      nombre_completo: form.get('nombre_completo'),
       telefono: form.get('telefono') || null,
-      email: form.get('email') || null,
-    })
-    setMessage(error ? 'No se pudo agregar el miembro del equipo directivo.' : 'Miembro agregado correctamente.')
+      correo: form.get('correo') || null,
+      solicitado_por: form.get('solicitado_por'),
+    }
+    const { error } = await getDb().schema('portal_escuelas').from('contactos_pendientes').insert(payload)
+    setMessage(
+      error
+        ? 'No se pudo enviar la propuesta de cambio.'
+        : editingContact
+          ? 'Corrección de contacto enviada. Un FED la va a revisar antes de aplicarla.'
+          : 'Alta de contacto enviada. Un FED la va a revisar antes de aplicarla.'
+    )
     if (!error) {
       setShowMiembro(false)
-      await refetchPortalData(Number(cue))
+      setEditingContact(null)
     }
   }
 
@@ -290,11 +313,13 @@ export default function Page() {
     setMessage(error ? 'No se pudo enviar la solicitud.' : 'Solicitud enviada correctamente.')
     if (!error) {
       setShowSolicitud(false)
-      await refetchPortalData(Number(cue))
+      await refetchPortalData(Number(cue), school)
     }
   }
 
   if (!cue) return <SearchLanding onSearch={handleSearch} notFound={notFound} searching={loading} />
+
+  const conectividadDisponible = school && (school.plan_enlace || school.proveedor_internet_pnce || school.plan_piso_tecnologico || school.tipo_piso_instalado)
 
   return (
     <main className="min-h-screen bg-background">
@@ -323,19 +348,38 @@ export default function Page() {
             )}
           </Card>
 
-          <Card icon={UserRound} title="Equipo directivo" action="Agregar miembro" onAction={() => setShowMiembro(true)}>
+          <Card
+            icon={UserRound}
+            title="Equipo directivo"
+            action="Agregar miembro"
+            onAction={() => {
+              setEditingContact(null)
+              setShowMiembro(true)
+            }}
+          >
             {team.length ? (
               <div className="flex flex-col gap-3">
                 {team.map((m) => (
                   <div key={m.id} className="rounded-xl bg-muted/50 p-3">
                     <div className="flex items-center justify-between">
-                      <p className="font-semibold">{m.nombre_completo}</p>
-                      <Pencil size={15} className="text-muted-foreground" />
+                      <p className="font-semibold">
+                        {m.nombre} {m.apellido}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingContact(m)
+                          setShowMiembro(true)
+                        }}
+                        className="text-muted-foreground hover:text-primary"
+                      >
+                        <Pencil size={15} />
+                      </button>
                     </div>
                     <p className="text-sm text-primary">{m.cargo}</p>
                     <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
                       <span>{m.telefono || 'Sin teléfono'}</span>
-                      <span>{m.email || 'Sin email'}</span>
+                      <span>{m.correo || 'Sin email'}</span>
                     </div>
                   </div>
                 ))}
@@ -346,14 +390,15 @@ export default function Page() {
           </Card>
 
           <Card icon={Wifi} title="Conectividad">
-            {connectivity ? (
+            {conectividadDisponible ? (
               <div className="flex flex-col gap-4">
-                <Row label="Piso tecnológico" value={connectivity.tipo_piso_tecnologico} icon={Cable} />
-                <Row label="Proveedor" value={connectivity.proveedor_internet} />
-                <Row label="Enlace / velocidad" value={[connectivity.tipo_enlace, connectivity.velocidad_contratada].filter(Boolean).join(' · ')} />
-                <span className="w-fit rounded-full bg-primary/10 px-3 py-1 text-xs font-bold text-primary">
-                  {connectivity.estado || 'Sin estado informado'}
-                </span>
+                <Row label="Plan de enlace" value={school.plan_enlace} icon={Cable} />
+                <Row label="Proveedor de internet" value={school.proveedor_internet_pnce} />
+                <Row label="Piso tecnológico" value={school.plan_piso_tecnologico} />
+                <Row label="Estado del piso instalado" value={school.tipo_piso_instalado} />
+                {school.pnce_estado && (
+                  <span className="w-fit rounded-full bg-primary/10 px-3 py-1 text-xs font-bold text-primary">{school.pnce_estado}</span>
+                )}
               </div>
             ) : (
               <Empty />
@@ -361,18 +406,28 @@ export default function Page() {
           </Card>
 
           <Card icon={UserRound} title="Facilitador asignado">
-            {fed ? (
-              <div className="flex flex-col gap-4">
-                <Row label="Nombre" value={fed.fed_nombre} />
-                <Row label="Email" value={fed.fed_email} icon={Mail} />
-                <Row label="Teléfono" value={fed.fed_telefono} icon={Phone} />
-                <Row label="Distrito" value={fed.distrito} />
-              </div>
-            ) : (
-              <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-5">
+              {fed ? (
+                <div className="flex flex-col gap-4">
+                  <Row label="Nombre" value={fed.nombre} />
+                  <Row label="Email" value={fed.email} icon={Mail} />
+                  <Row label="Teléfono" value={fed.telefono} icon={Phone} />
+                  <Row label="Distrito" value={fed.distrito} />
+                </div>
+              ) : (
                 <p className="text-sm text-muted-foreground">Aún no asignado</p>
-              </div>
-            )}
+              )}
+              {ced && (
+                <div className="border-t border-border pt-4">
+                  <p className="mb-3 text-xs font-bold uppercase tracking-wide text-muted-foreground">Coordinador de Educación Digital</p>
+                  <div className="flex flex-col gap-4">
+                    <Row label="Nombre" value={ced.nombre} />
+                    <Row label="Email" value={ced.email} icon={Mail} />
+                    <Row label="Teléfono" value={ced.telefono} icon={Phone} />
+                  </div>
+                </div>
+              )}
+            </div>
           </Card>
 
           <Card icon={ClipboardList} title="Solicitudes y trámites" action="Nueva solicitud" onAction={() => setShowSolicitud(true)}>
@@ -431,36 +486,58 @@ export default function Page() {
       )}
 
       {showMiembro && (
-        <Modal title="Agregar miembro del equipo directivo" onClose={() => setShowMiembro(false)}>
+        <Modal
+          title={editingContact ? 'Corregir datos del miembro' : 'Agregar miembro del equipo directivo'}
+          subtitle="El cambio queda pendiente hasta que un FED lo revise y apruebe."
+          onClose={() => {
+            setShowMiembro(false)
+            setEditingContact(null)
+          }}
+        >
           <form onSubmit={submitMiembro} className="flex flex-col gap-4">
             <label className="flex flex-col gap-2 text-sm font-semibold">
               Cargo
-              <select name="cargo" required className="rounded-lg border bg-background p-3 font-normal">
-                <option>Director</option>
-                <option>Vicedirector</option>
-                <option>Secretario</option>
-                <option>Regente</option>
-                <option>Otro</option>
+              <select name="cargo" defaultValue={editingContact?.cargo || 'DIRECTOR'} required className="rounded-lg border bg-background p-3 font-normal">
+                <option value="DIRECTOR">Director/a</option>
+                <option value="VICEDIRECTOR">Vicedirector/a</option>
+                <option value="SECRETARIO">Secretario/a</option>
+                <option value="REGENTE">Regente</option>
+                <option value="OTRO">Otro</option>
               </select>
             </label>
             <label className="flex flex-col gap-2 text-sm font-semibold">
-              Nombre completo
-              <input name="nombre_completo" required className="rounded-lg border bg-background p-3 font-normal" />
+              Nombre
+              <input name="nombre" defaultValue={editingContact?.nombre || ''} required className="rounded-lg border bg-background p-3 font-normal" />
+            </label>
+            <label className="flex flex-col gap-2 text-sm font-semibold">
+              Apellido
+              <input name="apellido" defaultValue={editingContact?.apellido || ''} className="rounded-lg border bg-background p-3 font-normal" />
             </label>
             <label className="flex flex-col gap-2 text-sm font-semibold">
               Teléfono
-              <input name="telefono" className="rounded-lg border bg-background p-3 font-normal" />
+              <input name="telefono" defaultValue={editingContact?.telefono || ''} className="rounded-lg border bg-background p-3 font-normal" />
             </label>
             <label className="flex flex-col gap-2 text-sm font-semibold">
               Email
-              <input name="email" type="email" className="rounded-lg border bg-background p-3 font-normal" />
+              <input name="correo" type="email" defaultValue={editingContact?.correo || ''} className="rounded-lg border bg-background p-3 font-normal" />
+            </label>
+            <label className="flex flex-col gap-2 text-sm font-semibold">
+              Solicitado por
+              <input name="solicitado_por" required className="rounded-lg border bg-background p-3 font-normal" />
             </label>
             <div className="flex justify-end gap-3">
-              <button type="button" onClick={() => setShowMiembro(false)} className="rounded-lg px-4 py-2 text-sm font-semibold">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMiembro(false)
+                  setEditingContact(null)
+                }}
+                className="rounded-lg px-4 py-2 text-sm font-semibold"
+              >
                 Cancelar
               </button>
               <button className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">
-                Agregar <ArrowRight size={16} />
+                Enviar {editingContact ? 'corrección' : 'alta'} <ArrowRight size={16} />
               </button>
             </div>
           </form>
