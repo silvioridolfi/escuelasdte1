@@ -25,6 +25,7 @@ const CAMPOS_ESTABLECIMIENTO = [
   { value: 'direccion', label: 'Dirección' },
   { value: 'ciudad', label: 'Ciudad' },
   { value: 'distrito', label: 'Distrito' },
+  { value: 'correo_institucional', label: 'Email institucional' },
 ]
 
 function Empty() {
@@ -191,6 +192,7 @@ export default function Page() {
   const [team, setTeam] = useState<any[]>([])
   const [fed, setFed] = useState<any>(null)
   const [ced, setCed] = useState<any>(null)
+  const [correoInstitucional, setCorreoInstitucional] = useState<string | null>(null)
   const [requests, setRequests] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
@@ -210,6 +212,8 @@ export default function Page() {
     setTeam(t.data || [])
     setRequests(r.data || [])
     setCed(cedRow.data)
+    const correoInst = (t.data || []).map((c: any) => c.correo).find((c: any) => !!c) || null
+    setCorreoInstitucional(correoInst)
 
     if (schoolData?.fed_a_cargo && schoolData.fed_a_cargo !== 'Sin FED asignado') {
       const { data: fedData } = await getDb()
@@ -252,6 +256,7 @@ export default function Page() {
     setTeam([])
     setFed(null)
     setCed(null)
+    setCorreoInstitucional(null)
     setRequests([])
     setMessage('')
     setNotFound(false)
@@ -261,6 +266,21 @@ export default function Page() {
     e.preventDefault()
     const form = new FormData(e.currentTarget)
     const campo = String(form.get('campo'))
+
+    if (campo === 'correo_institucional') {
+      const { error } = await getDb().schema('portal_escuelas').from('contactos_pendientes').insert({
+        cue: Number(cue),
+        accion: 'editar_correo',
+        nombre: '-',
+        cargo: '-',
+        correo: form.get('valor_propuesto'),
+        solicitado_por: form.get('solicitado_por'),
+      })
+      setMessage(error ? 'No se pudo enviar la solicitud de corrección.' : 'Solicitud de corrección enviada. Un FED la va a revisar antes de aplicarla.')
+      if (!error) setShowCorreccion(false)
+      return
+    }
+
     const valorActual = school?.[campo] ?? null
     const { error } = await getDb().schema('portal_escuelas').from('cambios_pendientes').insert({
       cue: Number(cue),
@@ -284,7 +304,7 @@ export default function Page() {
       apellido: form.get('apellido'),
       cargo: form.get('cargo'),
       telefono: form.get('telefono') || null,
-      correo: form.get('correo') || null,
+      correo: editingContact ? editingContact.correo : correoInstitucional,
       solicitado_por: form.get('solicitado_por'),
     }
     const { error } = await getDb().schema('portal_escuelas').from('contactos_pendientes').insert(payload)
@@ -342,6 +362,7 @@ export default function Page() {
                 <Row label="Nombre" value={school.nombre} />
                 <Row label="Dirección" value={[school.direccion, school.ciudad].filter(Boolean).join(', ')} icon={MapPin} />
                 <Row label="CUE" value={school.cue} />
+                <Row label="Email institucional" value={correoInstitucional} icon={Mail} />
               </div>
             ) : (
               <Empty />
@@ -379,7 +400,6 @@ export default function Page() {
                     <p className="text-sm text-primary">{m.cargo}</p>
                     <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
                       <span>{m.telefono || 'Sin teléfono'}</span>
-                      <span>{m.correo || 'Sin email'}</span>
                     </div>
                   </div>
                 ))}
@@ -517,10 +537,9 @@ export default function Page() {
               Teléfono
               <input name="telefono" defaultValue={editingContact?.telefono || ''} className="rounded-lg border bg-background p-3 font-normal" />
             </label>
-            <label className="flex flex-col gap-2 text-sm font-semibold">
-              Email
-              <input name="correo" type="email" defaultValue={editingContact?.correo || ''} className="rounded-lg border bg-background p-3 font-normal" />
-            </label>
+            <p className="text-xs text-muted-foreground">
+              El email institucional de la escuela se gestiona desde el box "Datos del establecimiento", no por persona.
+            </p>
             <label className="flex flex-col gap-2 text-sm font-semibold">
               Solicitado por
               <input name="solicitado_por" required className="rounded-lg border bg-background p-3 font-normal" />
