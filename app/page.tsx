@@ -296,6 +296,11 @@ export default function Page() {
   async function submitMiembro(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const form = new FormData(e.currentTarget)
+    const correoLaboral = String(form.get('correo_laboral') || '').trim()
+    if (correoLaboral && !correoLaboral.toLowerCase().endsWith('@abc.gob.ar')) {
+      setMessage('El email laboral debe ser institucional, con dominio @abc.gob.ar.')
+      return
+    }
     const payload = {
       cue: Number(cue),
       accion: editingContact ? 'editar' : 'agregar',
@@ -305,6 +310,7 @@ export default function Page() {
       cargo: form.get('cargo'),
       telefono: form.get('telefono') || null,
       correo: editingContact ? editingContact.correo : correoInstitucional,
+      correo_laboral: correoLaboral || null,
       solicitado_por: form.get('solicitado_por'),
     }
     const { error } = await getDb().schema('portal_escuelas').from('contactos_pendientes').insert(payload)
@@ -400,6 +406,7 @@ export default function Page() {
                     <p className="text-sm text-primary">{m.cargo}</p>
                     <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
                       <span>{m.telefono || 'Sin teléfono'}</span>
+                      <span>{m.correo_laboral || 'Sin email laboral'}</span>
                     </div>
                   </div>
                 ))}
@@ -536,6 +543,19 @@ export default function Page() {
             <label className="flex flex-col gap-2 text-sm font-semibold">
               Teléfono
               <input name="telefono" defaultValue={editingContact?.telefono || ''} className="rounded-lg border bg-background p-3 font-normal" />
+            </label>
+            <label className="flex flex-col gap-2 text-sm font-semibold">
+              Email laboral
+              <input
+                name="correo_laboral"
+                type="email"
+                defaultValue={editingContact?.correo_laboral || ''}
+                placeholder="nombre@abc.gob.ar"
+                pattern=".+@abc\.gob\.ar$"
+                title="Debe ser un email institucional con dominio @abc.gob.ar"
+                className="rounded-lg border bg-background p-3 font-normal"
+              />
+              <span className="text-xs font-normal text-muted-foreground">Debe ser el email laboral institucional (@abc.gob.ar), no personal.</span>
             </label>
             <p className="text-xs text-muted-foreground">
               El email institucional de la escuela se gestiona desde el box "Datos del establecimiento", no por persona.
